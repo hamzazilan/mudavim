@@ -558,11 +558,78 @@ table.plain tbody tr { cursor: pointer; }
 .member-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .member-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------- Rating ---------- */
+.badge.none { background: var(--surface-2); color: var(--muted); min-width: 40px; }
+.stat .v .badge { font-size: 20px; padding: 4px 10px; }
+.motm { color: var(--accent); font-size: 15px; margin-left: 2px; }
+.motm.big { font-size: 30px; line-height: 1; }
+.motm-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-color: var(--accent);
+}
+.motm-card .motm-val { margin-left: auto; }
+.motm-card .motm-val .badge { font-size: 18px; padding: 6px 12px; }
+
+.lineup li a { gap: 10px; }
+.lineup .ln-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.row-rating { display: flex; align-items: center; gap: 4px; padding-right: 12px; flex: none; }
+
+.vote-card, .admin-votes { margin-top: 16px; }
+.vote-group {
+  padding: 10px 16px 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.vote-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.vote-row .who { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.voted { color: var(--r-great); font-weight: 700; font-size: 13px; }
+.score-btns { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.score-btns button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.score-btns button + button { border-left: 1px solid var(--line); }
+.score-btns button:hover { background: var(--surface-2); color: var(--text); }
+.score-btns.picked button.sel { color: #fff; }
+.score-btns.tier-elite { background: transparent; } .score-btns.tier-elite button.sel { background: var(--r-elite); }
+.score-btns.tier-great { background: transparent; } .score-btns.tier-great button.sel { background: var(--r-great); }
+.score-btns.tier-good  { background: transparent; } .score-btns.tier-good  button.sel { background: var(--r-good); color: #10200a; }
+.score-btns.tier-ok    { background: transparent; } .score-btns.tier-ok    button.sel { background: var(--r-ok); color: #1d1600; }
+.score-btns.tier-poor  { background: transparent; } .score-btns.tier-poor  button.sel { background: var(--r-poor); }
+.score-btns.tier-bad   { background: transparent; } .score-btns.tier-bad   button.sel { background: var(--r-bad); }
+.vote-card .form-actions { align-items: center; }
+th.vt { font-size: 11px; text-transform: none; letter-spacing: 0; }
+
 tbody tr.me { background: rgba(255, 184, 0, .08); }
 tbody tr.me td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
 @media (max-width: 600px) {
   .userbox { margin-left: auto; }
+  .score-btns button { width: 28px; height: 30px; font-size: 12px; }
+  .with-res { flex-wrap: wrap; }
   .user-chip span:not(.avatar) { display: none; }
   .user-chip { padding: 4px; }
   .match-row { grid-template-columns: 1fr auto 1fr; row-gap: 4px; padding: 10px 12px; }

@@ -64,6 +64,62 @@ service cloud.firestore {
         );
     }
 
+    // ---- Rating (maç sonu puanlama) ----
+    function docPath(c, id) {
+      return /databases/$(database)/documents/$(c)/$(id);
+    }
+
+    function lockId(d) {
+      return d.match + "_" + d.rater + "_" + d.target;
+    }
+
+    function validVote(d) {
+      let m = get(docPath("matches", d.match)).data;
+      return request.time < m.voteUntil
+        && (d.rater in m.home.players || d.rater in m.away.players)
+        && (d.target in m.home.players || d.target in m.away.players);
+    }
+
+    // Gizli kayıt: kim kime kaç verdi. Sadece admin ve puanı veren okur.
+    match /privateVotes/{vid} {
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isApproved()
+        && request.resource.data.keys().hasOnly(["match", "rater", "target", "score", "uid"])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.score is int
+        && request.resource.data.score >= 1
+        && request.resource.data.score <= 10
+        && request.resource.data.rater != request.resource.data.target
+        && get(docPath("players", request.resource.data.rater)).data.get("uid", null) == request.auth.uid
+        && validVote(request.resource.data)
+        && !exists(docPath("voteLocks", lockId(request.resource.data)))
+        && getAfter(docPath("voteLocks", lockId(request.resource.data))).data.voteId == vid;
+      allow delete: if isAdmin();
+    }
+
+    // Aynı kişiye aynı maçta ikinci kez puan verilmesini engeller
+    match /voteLocks/{lid} {
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(["match", "rater", "target", "uid", "voteId"])
+        && request.resource.data.uid == request.auth.uid
+        && lid == lockId(request.resource.data)
+        && getAfter(docPath("privateVotes", request.resource.data.voteId)).data.uid == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+
+    // İsimsiz kayıt: sadece kime kaç puan verildiği. Herkes okur.
+    match /publicVotes/{vid} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(["match", "target", "score"])
+        && getAfter(docPath("privateVotes", vid)).data.uid == request.auth.uid
+        && getAfter(docPath("privateVotes", vid)).data.match == request.resource.data.match
+        && getAfter(docPath("privateVotes", vid)).data.target == request.resource.data.target
+        && getAfter(docPath("privateVotes", vid)).data.score == request.resource.data.score;
+      allow delete: if isAdmin();
+    }
+
     // ---- Üyeler ----
     match /users/{uid} {
       // Herkes kendi kaydını, admin herkesi görür

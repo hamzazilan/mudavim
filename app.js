@@ -98,7 +98,20 @@
   const col = (name) => fbDb.collection(name);
 
   const store = {
-    addMatch: (m) => write(() => col("matches").doc(m.id).set(withoutId(m)), () => DB.matches.push(m)),
+    addMatch: (m) => write(() => col("matches").doc(m.id).set(toRemoteMatch(m)), () => DB.matches.push(m)),
+    openVoting: (m, untilMs) =>
+      write(
+        () =>
+          col("matches").doc(m.id).update({
+            voteUntil: firebase.firestore.Timestamp.fromMillis(untilMs),
+            ratingFinal: false,
+          }),
+        () => {
+          m.voteUntil = untilMs;
+          m.ratingFinal = false;
+          m.ratingSummary = m.ratingSummary || {};
+        }
+      ),
     deleteMatch: (id) =>
       write(() => col("matches").doc(id).delete(), () => (DB.matches = DB.matches.filter((m) => m.id !== id))),
     addSeason: (s) => write(() => col("seasons").doc(s.id).set(withoutId(s)), () => DB.seasons.push(s)),
@@ -300,12 +313,110 @@
     [...list].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
 
   // =================================================================
+  //  RATING
+  //  privateVotes : {match, rater, target, score, uid}  → admin + puanı veren okur
+  //  publicVotes  : {match, target, score}              → herkes okur (isimsiz)
+  //  voteLocks    : aynı kişiye iki kez puan verilmesini engeller
+  //  Puanlama süresi bitince admin tarayıcısı sonuçları maçın içine
+  //  (ratingSummary) yazar; böylece eski maçlar için tekrar okuma gerekmez.
+  // =================================================================
+  const VOTE_DAYS = 3;
+  const tsMs = (t) =>
+    !t ? 0 : typeof t === "number" ? t : t.toMillis ? t.toMillis() : t.seconds ? t.seconds * 1000 : 0;
+  const votingOpen = (m) => FB_ON && Date.now() < tsMs(m.voteUntil);
+  const inMatch = (m, pid) => m.home.players.includes(pid) || m.away.players.includes(pid);
+
+  function ratingOf(m, pid) {
+    const r = m.ratingSummary && m.ratingSummary[pid];
+    return r && r.n ? r.s / r.n : null;
+  }
+
+  // Maçın oyuncusu: en yüksek ortalama (eşitlikte daha çok oy alan)
+  function motmOf(m) {
+    let best = null;
+    for (const pid of [...m.home.players, ...m.away.players]) {
+      const r = m.ratingSummary && m.ratingSummary[pid];
+      if (!r || !r.n) continue;
+      const avg = r.s / r.n;
+      if (!best || avg > best.avg || (avg === best.avg && r.n > best.n)) best = { pid, avg, n: r.n };
+    }
+    return best && best.pid;
+  }
+
+  function ratingTier(v) {
+    if (v >= 9) return "tier-elite";
+    if (v >= 8) return "tier-great";
+    if (v >= 7) return "tier-good";
+    if (v >= 6) return "tier-ok";
+    if (v >= 5) return "tier-poor";
+    return "tier-bad";
+  }
+
+  const ratingBadge = (v, title = "") =>
+    v == null
+      ? `<span class="badge none">–</span>`
+      : `<span class="badge ${ratingTier(v)}" ${title ? `title="${esc(title)}"` : ""}>${v.toFixed(1)}</span>`;
+
+  // Puanlaması bitmemiş maçların isimsiz oylarını okuyup ortalamaları hesapla
+  async function loadRatings() {
+    const open = DB.matches.filter((m) => !m.ratingFinal && m.voteUntil);
+    for (let i = 0; i < open.length; i += 30) {
+      const chunk = open.slice(i, i + 30);
+      const snap = await col("publicVotes").where("match", "in", chunk.map((m) => m.id)).get();
+      const agg = {};
+      snap.forEach((d) => {
+        const v = d.data();
+        const a = (agg[v.match] = agg[v.match] || {});
+        const r = (a[v.target] = a[v.target] || { s: 0, n: 0 });
+        r.s += v.score;
+        r.n += 1;
+      });
+      for (const m of chunk) {
+        m.ratingSummary = agg[m.id] || {};
+        liveLoaded.add(m.id);
+      }
+    }
+  }
+  const liveLoaded = new Set(); // oyları başarıyla okunmuş maçlar
+
+  // Admin girişinde: süresi dolan maçların sonuçlarını kalıcı yaz
+  async function finalizeRatings() {
+    if (!FB_ON || !isAdmin() || needsSeed) return;
+    const closed = DB.matches.filter(
+      (m) => !m.ratingFinal && m.voteUntil && liveLoaded.has(m.id) && Date.now() > tsMs(m.voteUntil) + 60000
+    );
+    for (const m of closed) {
+      try {
+        await col("matches").doc(m.id).update({ ratingSummary: m.ratingSummary || {}, ratingFinal: true });
+        m.ratingFinal = true;
+      } catch (e) {
+        console.error("Rating sonucu yazılamadı", m.id, e);
+      }
+    }
+  }
+
+  // Maç tarihinin sonu ya da şimdi (hangisi sonraysa) + VOTE_DAYS gün
+  function voteDeadlineFor(dateIso) {
+    const end = new Date(dateIso + "T23:59:59").getTime();
+    return Math.max(end, Date.now()) + VOTE_DAYS * 86400000;
+  }
+
+  function toRemoteMatch(m) {
+    const data = withoutId({ ...m, voteUntil: undefined });
+    if (m.voteUntil) data.voteUntil = firebase.firestore.Timestamp.fromMillis(tsMs(m.voteUntil));
+    return data;
+  }
+
+  // =================================================================
   //  İSTATİSTİK  (seasonId yoksa tüm zamanlar)
   // =================================================================
   function computeStats(seasonId) {
     const stats = {};
     for (const p of DB.players) {
-      stats[p.id] = { player: p, played: 0, won: 0, drawn: 0, lost: 0, legacyPlayed: 0, goals: 0, assists: 0 };
+      stats[p.id] = {
+        player: p, played: 0, won: 0, drawn: 0, lost: 0, legacyPlayed: 0, goals: 0, assists: 0,
+        ratings: [], motm: 0,
+      };
     }
     for (const season of DB.seasons) {
       if (seasonId && season.id !== seasonId) continue;
@@ -327,13 +438,20 @@
         if (r === "W") s.won++;
         else if (r === "D") s.drawn++;
         else s.lost++;
+        const rt = ratingOf(m, pid);
+        if (rt != null) s.ratings.push(rt);
       }
       for (const g of m.goals || []) {
         if (stats[g.player]) stats[g.player].goals++;
         if (g.assist && stats[g.assist]) stats[g.assist].assists++;
       }
+      const best = motmOf(m);
+      if (best && stats[best]) stats[best].motm++;
     }
-    for (const s of Object.values(stats)) s.rate = pct(s.won, s.played);
+    for (const s of Object.values(stats)) {
+      s.rate = pct(s.won, s.played);
+      s.rating = s.ratings.length ? s.ratings.reduce((a, b) => a + b, 0) / s.ratings.length : null;
+    }
     return stats;
   }
 
@@ -365,7 +483,18 @@
         s: best("rate", active.filter((s) => s.played >= minForRate)),
         value: (s) => fmtPct(s.rate),
       },
-    ].filter((h) => h.s);
+    ];
+    const rated = active.filter((s) => s.ratings.length);
+    if (rated.length) {
+      const maxRated = Math.max(...rated.map((s) => s.ratings.length));
+      const minRated = Math.max(1, Math.ceil(maxRated / 3));
+      items.push({
+        label: `En yüksek rating (${minRated}+ maç)`,
+        s: best("rating", rated.filter((s) => s.ratings.length >= minRated)),
+        value: (s) => s.rating.toFixed(2),
+      });
+    }
+    items.splice(0, items.length, ...items.filter((h) => h.s));
 
     return `
       <section class="highlights">
@@ -391,6 +520,7 @@
     { key: "won", label: "G" },
     { key: "other", label: "B+M", hideSm: true },
     { key: "rate", label: "Gal. Oranı" },
+    { key: "rating", label: "Rating" },
   ];
 
   function mountStandings(el, statsList) {
@@ -420,7 +550,8 @@
       </table></div>`;
 
     const tbody = el.querySelector("tbody");
-    const val = (s) => (tableState.sort === "other" ? s.played - s.won : s[tableState.sort]);
+    const val = (s) =>
+      tableState.sort === "other" ? s.played - s.won : tableState.sort === "rating" ? s.rating ?? -1 : s[tableState.sort];
     const mine = myPlayer();
 
     function draw() {
@@ -441,11 +572,12 @@
             <td class="num">${s.won}</td>
             <td class="num hide-sm">${s.played - s.won}</td>
             <td class="num">${badge(s.rate)}</td>
+            <td class="num">${ratingBadge(s.rating, s.ratings.length ? s.ratings.length + " maç" : "")}</td>
             <td class="hide-sm"><span class="bar"><i style="width:${s.rate}%"></i></span></td>
           </tr>`
             )
             .join("")
-        : `<tr><td colspan="7" class="empty">Gösterilecek oyuncu yok.</td></tr>`;
+        : `<tr><td colspan="8" class="empty">Gösterilecek oyuncu yok.</td></tr>`;
     }
     draw();
 
@@ -587,16 +719,33 @@
     const season = seasonById(m.season);
     const [h, a] = m.score;
 
+    const motm = motmOf(m);
     const lineup = (team, won) => `
       <div class="card lineup">
         <div class="card-head"><h2>${esc(team.name)}</h2>${won ? `<span class="tag">Kazanan</span>` : ""}</div>
         <ul>
           ${team.players
             .map((pid) => P[pid] || { id: pid, name: pid })
-            .map((p) => `<li><a href="#/oyuncu/${p.id}">${avatar(p, "sm")}${esc(p.name)}</a></li>`)
+            .map((p) => {
+              const r = m.ratingSummary && m.ratingSummary[p.id];
+              return `<li><a href="#/oyuncu/${p.id}">
+                ${avatar(p, "sm")}<span class="ln-name">${esc(p.name)}</span>
+                ${p.id === motm ? `<span class="motm" title="Maçın oyuncusu">★</span>` : ""}
+                ${ratingBadge(ratingOf(m, p.id), r ? r.n + " oy" : "")}
+              </a></li>`;
+            })
             .join("")}
         </ul>
       </div>`;
+
+    const motmP = motm && (P[motm] || { id: motm, name: motm });
+    const motmHtml = motmP
+      ? `<a class="card motm-card" href="#/oyuncu/${motmP.id}">
+          <span class="motm big">★</span>
+          <div><div class="hl-label">Maçın oyuncusu</div><div class="hl-name">${esc(motmP.name)}</div></div>
+          <div class="motm-val">${ratingBadge(ratingOf(m, motm))}</div>
+        </a>`
+      : "";
 
     app.innerHTML = `
       <a class="back" href="#/maclar">← Maçlar</a>
@@ -609,10 +758,236 @@
         </div>
         <div class="sb-meta">${h === a ? "Berabere" : "Maç sonu"} · ${m.home.players.length} v ${m.away.players.length}</div>
       </section>
+      ${motmHtml}
       <section class="lineups">
         ${lineup(m.home, h > a)}
         ${lineup(m.away, a > h)}
+      </section>
+      <div id="vote"></div>
+      <div id="vote-admin"></div>`;
+
+    mountVotePanel(m);
+    mountAdminVotes(m);
+  }
+
+  // ---- Puanlama paneli ----
+  async function mountVotePanel(m) {
+    const el = document.getElementById("vote");
+    if (!el || !FB_ON) return;
+    const open = votingOpen(m);
+    const until = tsMs(m.voteUntil);
+    const untilText = until
+      ? new Date(until).toLocaleString("tr-TR", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+      : "";
+
+    const shell = (inner, head = "Oyuncuları puanla") => `
+      <section class="card vote-card">
+        <div class="card-head"><h2>${head}</h2>${open ? `<span class="muted">${untilText}'e kadar açık</span>` : ""}</div>
+        ${inner}
       </section>`;
+
+    // Admin: puanlamayı aç / uzat
+    const adminTools = isAdmin()
+      ? `<div class="pad form-actions"><button class="btn ghost" id="v-open">${
+          open ? `Süreyi ${VOTE_DAYS} gün uzat` : `Puanlamayı aç (${VOTE_DAYS} gün)`
+        }</button></div>`
+      : "";
+    const bindAdminTools = () => {
+      const b = document.getElementById("v-open");
+      if (b)
+        b.addEventListener("click", () =>
+          busy(b, async () => {
+            if (await store.openVoting(m, Date.now() + VOTE_DAYS * 86400000)) {
+              toast("Puanlama açıldı.");
+              renderMatch(m.id);
+            }
+          })
+        );
+    };
+
+    const mine = myPlayer();
+    const plays = mine && inMatch(m, mine.id);
+
+    if (!open) {
+      if (!until && !isAdmin()) return (el.innerHTML = "");
+      el.innerHTML = shell(
+        `<div class="empty">${until ? "Bu maçın puanlaması kapandı." : "Bu maç için puanlama açılmadı."}</div>${adminTools}`,
+        "Puanlama"
+      );
+      return bindAdminTools();
+    }
+    if (!session.ready) return (el.innerHTML = shell(`<div class="empty">Yükleniyor…</div>`));
+    if (!session.user) {
+      el.innerHTML = shell(`<div class="empty">Bu maçta oynadıysan puan vermek için <a class="link" href="#/giris">giriş yap</a>.</div>`);
+      return;
+    }
+    if (!plays) {
+      el.innerHTML = shell(
+        `<div class="empty">${
+          !mine
+            ? `Puan verebilmek için <a class="link" href="#/hesap">oyuncu profilini seç</a>.`
+            : "Sadece bu maçta oynayanlar puan verebilir."
+        }</div>${adminTools}`
+      );
+      return bindAdminTools();
+    }
+
+    // Daha önce puanladıklarını bul
+    el.innerHTML = shell(`<div class="empty">Yükleniyor…</div>`);
+    let done = new Set();
+    try {
+      const snap = await col("voteLocks").where("match", "==", m.id).where("uid", "==", session.user.uid).get();
+      snap.forEach((d) => done.add(d.data().target));
+    } catch (err) {
+      el.innerHTML = shell(`<div class="empty">Puanlar yüklenemedi: ${esc(errText(err))}</div>`);
+      return;
+    }
+    if (!document.body.contains(el)) return;
+
+    const P = playerById();
+    const myTeam = m.home.players.includes(mine.id) ? "home" : "away";
+    const groups = [
+      { title: m[myTeam].name + " (takımın)", ids: m[myTeam].players },
+      { title: m[myTeam === "home" ? "away" : "home"].name + " (rakip)", ids: m[myTeam === "home" ? "away" : "home"].players },
+    ];
+    const targets = [...m.home.players, ...m.away.players].filter((pid) => pid !== mine.id);
+    const left = targets.filter((pid) => !done.has(pid));
+    const picks = {};
+
+    el.innerHTML = shell(`
+      <div class="pad muted">
+        Maçtaki performanslarına göre 1–10 arası puan ver. Puanların gizlidir; diğer üyeler sadece ortalamaları görür.
+        <b>Gönderdikten sonra değiştirilemez.</b>
+      </div>
+      ${groups
+        .map(
+          (g) => `
+        <div class="vote-group">${esc(g.title)}</div>
+        ${g.ids
+          .filter((pid) => pid !== mine.id)
+          .map((pid) => {
+            const p = P[pid] || { id: pid, name: pid };
+            return `
+          <div class="vote-row" data-pid="${pid}">
+            <span class="who">${avatar(p, "sm")}${esc(p.name)}</span>
+            ${
+              done.has(pid)
+                ? `<span class="voted">Puanladın ✓</span>`
+                : `<span class="score-btns">${Array.from({ length: 10 }, (_, i) => i + 1)
+                    .map((n) => `<button type="button" data-score="${n}">${n}</button>`)
+                    .join("")}</span>`
+            }
+          </div>`;
+          })
+          .join("")}`
+        )
+        .join("")}
+      ${
+        left.length
+          ? `<div class="pad form-actions"><span class="muted" id="v-count">0 / ${left.length} seçildi</span>
+               <button class="btn" id="v-send">Puanları gönder</button></div>`
+          : `<div class="pad muted">Bu maçtaki herkesi puanladın. Teşekkürler!</div>`
+      }
+      ${adminTools}`);
+    bindAdminTools();
+
+    el.querySelectorAll(".score-btns").forEach((wrap) =>
+      wrap.addEventListener("click", (e) => {
+        const b = e.target.closest("button[data-score]");
+        if (!b) return;
+        const pid = wrap.closest("[data-pid]").dataset.pid;
+        picks[pid] = Number(b.dataset.score);
+        wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("sel", x === b));
+        wrap.className = "score-btns picked " + ratingTier(picks[pid]);
+        document.getElementById("v-count").textContent = `${Object.keys(picks).length} / ${left.length} seçildi`;
+      })
+    );
+
+    const send = document.getElementById("v-send");
+    if (send)
+      send.addEventListener("click", () =>
+        busy(send, async () => {
+          const entries = Object.entries(picks).filter(([pid]) => !done.has(pid));
+          if (!entries.length) return toast("Önce en az bir oyuncuya puan ver.", true);
+          let ok = 0;
+          for (const [target, score] of entries) {
+            const vid = col("privateVotes").doc().id;
+            const batch = fbDb.batch();
+            batch.set(col("privateVotes").doc(vid), { match: m.id, rater: mine.id, target, score, uid: session.user.uid });
+            batch.set(col("voteLocks").doc(`${m.id}_${mine.id}_${target}`), {
+              match: m.id, rater: mine.id, target, uid: session.user.uid, voteId: vid,
+            });
+            batch.set(col("publicVotes").doc(vid), { match: m.id, target, score });
+            try {
+              await batch.commit();
+              ok++;
+              m.ratingSummary = m.ratingSummary || {};
+              const r = (m.ratingSummary[target] = m.ratingSummary[target] || { s: 0, n: 0 });
+              r.s += score;
+              r.n += 1;
+            } catch (err) {
+              console.error(err);
+              toast("Bir puan gönderilemedi: " + errText(err), true);
+              break;
+            }
+          }
+          if (ok) {
+            toast(`${ok} puan gönderildi.`);
+            renderMatch(m.id);
+          }
+        })
+      );
+  }
+
+  // ---- Admin: kim kime kaç verdi ----
+  function mountAdminVotes(m) {
+    const el = document.getElementById("vote-admin");
+    if (!el || !FB_ON || !isAdmin() || !m.voteUntil) return;
+    el.innerHTML = `
+      <section class="card admin-votes">
+        <div class="card-head"><h2>Puan detayları <span class="tag">Sadece admin</span></h2>
+          <button class="btn ghost" id="va-load">Göster</button></div>
+        <div id="va-body"></div>
+      </section>`;
+    const btn = document.getElementById("va-load");
+    btn.addEventListener("click", () =>
+      busy(btn, async () => {
+        const body = document.getElementById("va-body");
+        let votes;
+        try {
+          const snap = await col("privateVotes").where("match", "==", m.id).get();
+          votes = snap.docs.map((d) => d.data());
+        } catch (err) {
+          body.innerHTML = `<div class="empty">Yüklenemedi: ${esc(errText(err))}</div>`;
+          return;
+        }
+        const P = playerById();
+        const name = (pid) => esc((P[pid] && P[pid].name) || pid);
+        const byRater = {};
+        votes.forEach((v) => (byRater[v.rater] = byRater[v.rater] || []).push(v));
+        const raters = Object.keys(byRater).sort((a, b) => name(a).localeCompare(name(b), "tr"));
+        const players = [...m.home.players, ...m.away.players];
+        const notVoted = players.filter((pid) => !byRater[pid]);
+
+        body.innerHTML = votes.length
+          ? `<div class="table-wrap"><table class="plain">
+              <thead><tr><th>Puan veren</th>${players.map((pid) => `<th class="num vt">${name(pid)}</th>`).join("")}</tr></thead>
+              <tbody>${raters
+                .map(
+                  (r) => `<tr><td><b>${name(r)}</b></td>${players
+                    .map((t) => {
+                      const v = byRater[r].find((x) => x.target === t);
+                      return `<td class="num">${t === r ? `<span class="muted">—</span>` : v ? ratingBadge(v.score) : ""}</td>`;
+                    })
+                    .join("")}</tr>`
+                )
+                .join("")}</tbody>
+            </table></div>
+            ${notVoted.length ? `<div class="pad muted">Henüz puan vermeyenler: ${notVoted.map(name).join(", ")}</div>` : ""}`
+          : `<div class="empty">Bu maç için henüz puan verilmedi.</div>`;
+        btn.hidden = true;
+      })
+    );
   }
 
   function renderPlayer(id) {
@@ -648,6 +1023,9 @@
         <div class="card stat"><div class="v">${s.played}</div><div class="l">Maç</div></div>
         <div class="card stat"><div class="v">${s.won}</div><div class="l">Galibiyet</div></div>
         <div class="card stat"><div class="v">${other}</div><div class="l">Beraberlik + Mağlubiyet</div></div>
+        <div class="card stat"><div class="v">${s.rating != null ? ratingBadge(s.rating) : "–"}</div>
+          <div class="l">Ort. rating</div><div class="s">${s.ratings.length} puanlanan maç</div></div>
+        <div class="card stat"><div class="v">${s.motm}</div><div class="l">Maçın oyuncusu</div></div>
         <div class="card stat"><div class="v">${s.goals}</div><div class="l">Gol</div></div>
         <div class="card stat"><div class="v">${s.assists}</div><div class="l">Asist</div></div>
       </section>
@@ -657,7 +1035,7 @@
         ${
           perSeason.length
             ? `<div class="table-wrap"><table class="plain">
-                <thead><tr><th>Sezon</th><th class="num">Maç</th><th class="num">G</th><th class="num">B+M</th><th class="num">Oran</th></tr></thead>
+                <thead><tr><th>Sezon</th><th class="num">Maç</th><th class="num">G</th><th class="num">B+M</th><th class="num">Oran</th><th class="num">Rating</th></tr></thead>
                 <tbody>${perSeason
                   .map(
                     ({ season, st }) => `
@@ -667,6 +1045,7 @@
                     <td class="num">${st.won}</td>
                     <td class="num">${st.played - st.won}</td>
                     <td class="num">${badge(st.rate)}</td>
+                    <td class="num">${ratingBadge(st.rating)}</td>
                   </tr>`
                   )
                   .join("")}</tbody>
@@ -680,7 +1059,12 @@
         ${
           myMatches.length
             ? `<div class="match-list">${myMatches
-                .map((m) => `<div class="with-res">${resChip(resultFor(m, id))}${matchRow(m)}</div>`)
+                .map(
+                  (m) =>
+                    `<div class="with-res">${resChip(resultFor(m, id))}${matchRow(m)}<span class="row-rating">${
+                      motmOf(m) === id ? `<span class="motm" title="Maçın oyuncusu">★</span>` : ""
+                    }${ratingBadge(ratingOf(m, id))}</span></div>`
+                )
                 .join("")}</div>`
             : `<div class="empty">Siteye girilmiş maçı yok.${
                 s.legacyPlayed ? `<br>Excel'den gelen ${s.legacyPlayed} maçın detayı kayıtlı değil.` : ""
@@ -1334,6 +1718,10 @@
             score: [hs, as],
             goals: [],
           };
+          if (FB_ON) {
+            match.voteUntil = voteDeadlineFor(form.date);
+            match.ratingSummary = {};
+          }
           if (!(await store.addMatch(match))) return;
           Object.assign(form, { homeScore: "", awayScore: "", side: {}, q: "" });
           toast("Maç kaydedildi.");
@@ -1482,6 +1870,7 @@
     session.ready = true;
     updateTopbar();
     route();
+    finalizeRatings();
   }
 
   // =================================================================
@@ -1532,6 +1921,13 @@
     app.innerHTML = `<div class="card empty">Yükleniyor…</div>`;
     try {
       DB = await loadRemote();
+      if (!needsSeed) {
+        try {
+          await loadRatings();
+        } catch (err) {
+          console.error("Rating'ler yüklenemedi", err);
+        }
+      }
     } catch (err) {
       console.error(err);
       DB = normalize(clone(window.MUDAVIM));
