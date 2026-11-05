@@ -112,8 +112,24 @@
           m.ratingSummary = m.ratingSummary || {};
         }
       ),
+    // Maçla birlikte o maça ait tüm puanları da sil (aynı kimlikle yeni maç girilirse karışmasın)
     deleteMatch: (id) =>
-      write(() => col("matches").doc(id).delete(), () => (DB.matches = DB.matches.filter((m) => m.id !== id))),
+      write(
+        async () => {
+          const refs = [];
+          for (const c of ["privateVotes", "publicVotes", "voteLocks"]) {
+            const snap = await col(c).where("match", "==", id).get();
+            snap.forEach((d) => refs.push(d.ref));
+          }
+          for (let i = 0; i < refs.length; i += 400) {
+            const batch = fbDb.batch();
+            refs.slice(i, i + 400).forEach((r) => batch.delete(r));
+            await batch.commit();
+          }
+          await col("matches").doc(id).delete();
+        },
+        () => (DB.matches = DB.matches.filter((m) => m.id !== id))
+      ),
     addSeason: (s) => write(() => col("seasons").doc(s.id).set(withoutId(s)), () => DB.seasons.push(s)),
     renameSeason: (id, name) =>
       write(() => col("seasons").doc(id).update({ name }), () => (seasonById(id).name = name)),
