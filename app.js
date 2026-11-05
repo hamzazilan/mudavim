@@ -833,7 +833,17 @@
         : "";
 
     let body = "";
-    if (!approved) {
+    if (approved && needsSeed) {
+      body = `
+        <section class="card notice">
+          <div><b>Veritabanı henüz kurulmadı.</b> ${
+            admin
+              ? "Profil seçmeden önce oyuncu listesini Firebase'e yükle."
+              : "Bir admin oyuncu listesini yükleyince buradan profilini seçebileceksin."
+          }</div>
+          ${admin ? `<div class="notice-actions"><a class="btn" href="#/veri">Veri Gir'e git</a></div>` : ""}
+        </section>`;
+    } else if (!approved) {
       body =
         prof.status === "rejected"
           ? `<section class="card pad">Kaydın bir admin tarafından reddedildi. Bir hata olduğunu düşünüyorsan adminlerle konuş.</section>`
