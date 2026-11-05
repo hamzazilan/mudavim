@@ -1,0 +1,85 @@
+rules_version = '2';
+
+// =====================================================================
+//  MÜDAVİM — Firestore güvenlik kuralları
+//  Firebase konsolu > Firestore Database > Kurallar sekmesine yapıştır.
+//  ADMIN mail listesini config.js'teki ile aynı tut (küçük harfle yaz).
+// =====================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in [
+          "hamzazilan34@gmail.com",
+          "gokbarazomerfaruk@gmail.com"
+        ];
+    }
+
+    function myUserDoc() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function isApproved() {
+      return signedIn() && exists(myUserDoc()) && get(myUserDoc()).data.status == "approved";
+    }
+
+    // ---- Sezonlar ve maçlar: herkes okur, sadece admin yazar ----
+    match /seasons/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /matches/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---- Oyuncular ----
+    match /players/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+
+      // Onaylı üye kendi adıyla yeni oyuncu oluşturabilir
+      allow create: if isApproved()
+        && request.resource.data.keys().hasOnly(["name", "uid", "createdAt"])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 1
+        && request.resource.data.name.size() <= 40;
+
+      // Onaylı üye sahipsiz bir oyuncuyu kendine bağlayabilir
+      // ya da kendine bağlı oyuncunun bağlantısını kaldırabilir
+      allow update: if isApproved()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["uid"])
+        && (
+          (resource.data.get("uid", null) == null && request.resource.data.uid == request.auth.uid)
+          || (resource.data.get("uid", null) == request.auth.uid && request.resource.data.uid == null)
+        );
+    }
+
+    // ---- Üyeler ----
+    match /users/{uid} {
+      // Herkes kendi kaydını, admin herkesi görür
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+
+      // Yeni kayıt her zaman "onay bekliyor" olarak açılır
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(["email", "displayName", "status", "createdAt"])
+        && request.resource.data.status == "pending";
+
+      // Üye sadece görünen adını değiştirebilir
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["displayName"]);
+
+      // Admin her şeyi yapabilir (onay, red, silme)
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}

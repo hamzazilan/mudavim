@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Müdavim · İEL Halı Saha</title>
+  <link rel="icon" href="assets/logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <img src="assets/logo.png" alt="Müdavim logosu">
+      <span>
+        <strong>MÜDAVİM</strong>
+        <small>İEL Halı Saha · Münih</small>
+      </span>
+    </a>
+    <nav class="nav">
+      <a href="#/" data-nav="home">Sıralama</a>
+      <a href="#/sezonlar" data-nav="seasons">Sezonlar</a>
+      <a href="#/maclar" data-nav="matches">Maçlar</a>
+      <a href="#/veri" data-nav="admin" data-admin hidden>Veri Gir</a>
+      <a href="#/uyeler" data-nav="members" data-admin hidden>Üyeler</a>
+    </nav>
+    <div id="userbox" class="userbox"></div>
+  </header>
+
+  <main id="app" class="container"></main>
+
+  <footer class="footer">Müdavim · İEL Halı Saha Müdavimleri · Münih</footer>
+
+  <!-- Firebase (giriş + ortak veritabanı) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+  <script src="config.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
