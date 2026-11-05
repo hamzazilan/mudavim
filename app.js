@@ -352,6 +352,14 @@
     return "tier-bad";
   }
 
+  // Kaydırıcı için akışkan renk: 1 kırmızı → 5 turuncu/sarı → 8 yeşil → 10 mavi
+  function ratingColor(v) {
+    const t = Math.min(Math.max(v, 1), 10);
+    const hue = t <= 8 ? ((t - 1) / 7) * 130 : 130 + ((t - 8) / 2) * 80;
+    const light = hue > 35 && hue < 105; // sarı-yeşil arası açık renk → koyu yazı
+    return { bg: `hsl(${hue.toFixed(0)} 78% ${light ? 50 : 46}%)`, fg: light ? "#14130a" : "#fff" };
+  }
+
   const ratingBadge = (v, title = "") =>
     v == null
       ? `<span class="badge none">–</span>`
@@ -856,7 +864,8 @@
 
     el.innerHTML = shell(`
       <div class="pad muted">
-        Maçtaki performanslarına göre 1–10 arası puan ver. Puanların gizlidir; diğer üyeler sadece ortalamaları görür.
+        Kaydırarak maçtaki performanslarına göre 1.0–10.0 arası puan ver; dokunmadığın oyuncular puanlanmaz.
+        Puanların gizlidir; diğer üyeler sadece ortalamaları görür.
         <b>Gönderdikten sonra değiştirilemez.</b>
       </div>
       ${groups
@@ -873,9 +882,11 @@
             ${
               done.has(pid)
                 ? `<span class="voted">Puanladın ✓</span>`
-                : `<span class="score-btns">${Array.from({ length: 10 }, (_, i) => i + 1)
-                    .map((n) => `<button type="button" data-score="${n}">${n}</button>`)
-                    .join("")}</span>`
+                : `<span class="slider-wrap">
+                     <input type="range" class="rating-slider" min="1" max="10" step="0.1" value="6"
+                       aria-label="${esc(p.name)} için puan">
+                     <span class="slider-val">–</span>
+                   </span>`
             }
           </div>`;
           })
@@ -891,17 +902,24 @@
       ${adminTools}`);
     bindAdminTools();
 
-    el.querySelectorAll(".score-btns").forEach((wrap) =>
-      wrap.addEventListener("click", (e) => {
-        const b = e.target.closest("button[data-score]");
-        if (!b) return;
-        const pid = wrap.closest("[data-pid]").dataset.pid;
-        picks[pid] = Number(b.dataset.score);
-        wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("sel", x === b));
-        wrap.className = "score-btns picked " + ratingTier(picks[pid]);
+    el.querySelectorAll(".rating-slider").forEach((input) => {
+      const wrap = input.closest(".slider-wrap");
+      const out = wrap.querySelector(".slider-val");
+      const pid = input.closest("[data-pid]").dataset.pid;
+      const update = () => {
+        const v = Math.round(Number(input.value) * 10) / 10;
+        picks[pid] = v;
+        const c = ratingColor(v);
+        wrap.style.setProperty("--c", c.bg);
+        wrap.style.setProperty("--fill", ((v - 1) / 9) * 100 + "%");
+        wrap.classList.add("touched");
+        out.textContent = v.toFixed(1);
+        out.style.color = c.fg;
         document.getElementById("v-count").textContent = `${Object.keys(picks).length} / ${left.length} seçildi`;
-      })
-    );
+      };
+      input.addEventListener("input", update);
+      input.addEventListener("change", update);
+    });
 
     const send = document.getElementById("v-send");
     if (send)

@@ -86,7 +86,7 @@ service cloud.firestore {
       allow create: if isApproved()
         && request.resource.data.keys().hasOnly(["match", "rater", "target", "score", "uid"])
         && request.resource.data.uid == request.auth.uid
-        && request.resource.data.score is int
+        && request.resource.data.score is number
         && request.resource.data.score >= 1
         && request.resource.data.score <= 10
         && request.resource.data.rater != request.resource.data.target

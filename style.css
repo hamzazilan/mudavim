@@ -621,6 +621,66 @@ table.plain tbody tr { cursor: pointer; }
 .score-btns.tier-poor  { background: transparent; } .score-btns.tier-poor  button.sel { background: var(--r-poor); }
 .score-btns.tier-bad   { background: transparent; } .score-btns.tier-bad   button.sel { background: var(--r-bad); }
 .vote-card .form-actions { align-items: center; }
+
+/* Puan kaydırıcısı */
+.slider-wrap {
+  --c: #4b5059;
+  --fill: 55.5%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 260px;
+  max-width: 380px;
+}
+.rating-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(to right, var(--c) var(--fill), var(--surface-2) var(--fill));
+  outline: none;
+  cursor: pointer;
+  margin: 0;
+}
+.rating-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .5);
+  transition: transform .1s;
+}
+.rating-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .5);
+}
+.rating-slider::-moz-range-track { background: transparent; }
+.rating-slider:active::-webkit-slider-thumb { transform: scale(1.2); }
+.rating-slider:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.slider-wrap:not(.touched) .rating-slider { opacity: .55; }
+.slider-val {
+  flex: none;
+  width: 52px;
+  padding: 5px 0;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 800;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  transition: background .1s;
+}
+.slider-wrap.touched .slider-val { background: var(--c); }
 th.vt { font-size: 11px; text-transform: none; letter-spacing: 0; }
 
 tbody tr.me { background: rgba(255, 184, 0, .08); }
